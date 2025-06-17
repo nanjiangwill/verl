@@ -242,7 +242,7 @@ class AsyncRolloutRequest(BaseModel):
 
         messages = [*BASE_CHAT_HISTORY, self.messages[-1]]
         tools = [tool.model_dump() for tool in self.tool_schemas] if self.tool_schemas else None
-        content_ids = self._handle_apply_chat_template(processing_class, messages, tools=tools, multi_modal_data=self.multi_modal_data, add_generation_prompt=False, tokenize=True)[self.base_conv_with_gen_prompt_end_pos :]
+        content_ids = self._handle_apply_chat_template(processing_class, messages, tools=tools, add_generation_prompt=False, tokenize=True)[self.base_conv_with_gen_prompt_end_pos :]
         self._update_input_ids(content_ids, attention_mask=True, loss_mask=True)
 
     def add_tool_response_messages(self, processing_class: Union[PreTrainedTokenizer, PreTrainedTokenizerFast, ProcessorMixin], contents: list[str]) -> None:
@@ -258,7 +258,7 @@ class AsyncRolloutRequest(BaseModel):
 
         messages = [*BASE_CHAT_HISTORY, *self.messages[-len(contents) :]]
         tools = [tool.model_dump() for tool in self.tool_schemas] if self.tool_schemas else None
-        content_ids = self._handle_apply_chat_template(processing_class, messages, tools=tools, add_generation_prompt=False, tokenize=True)[self.base_conv_wo_gen_prompt_end_pos :]
+        content_ids = self._handle_apply_chat_template(processing_class, messages, tools=tools, multi_modal_data=delta_multi_modal_data, add_generation_prompt=False, tokenize=True)[self.base_conv_wo_gen_prompt_end_pos :]
         self._update_input_ids(content_ids, attention_mask=True, loss_mask=False)
 
     def update_metrics(self, metrics: Any, tool_id: str) -> None:
