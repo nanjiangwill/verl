@@ -114,6 +114,10 @@ class RLHFDataset(Dataset):
         self.chat_template_func = config.get("chat_template_func", None)
         self.need_tools_kwargs = config.get("need_tools_kwargs", False)
         self.filter_prompts = config.get("filter_prompts", True)
+
+        # TODO: we do not need to prepare multi_modal_inputs in datasets, doing it in rollout is more flexible
+        self.return_multi_modal = config.get("return_multi_modal", False)
+
         self.serialize_dataset = False
         self._download()
         self._read_files_and_tokenize()
@@ -190,32 +194,40 @@ class RLHFDataset(Dataset):
             from verl.utils.dataset.vision_utils import process_image, process_video
 
             raw_prompt = self.processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
-            multi_modal_data = {}
+            
+            if not self.return_multi_modal:
+                model_inputs = self.processor(text=[raw_prompt], images=None, videos=None, return_tensors="pt")
+                input_ids = model_inputs.pop("input_ids")
+                attention_mask = model_inputs.pop("attention_mask")
 
-            images = None
-            if self.image_key in row_dict:
-                images = [process_image(image) for image in row_dict.pop(self.image_key)]
-                multi_modal_data["image"] = images
+            else:
+                multi_modal_data = {}
 
-            videos = None
-            if self.video_key in row_dict:
-                videos = [process_video(video) for video in row_dict.pop(self.video_key)]
-                multi_modal_data["video"] = [video.numpy() for video in videos]
+                images = None
+                #TODO: temp pop => get
+                if self.image_key in row_dict:
+                    images = [process_image(image) for image in row_dict.get(self.image_key)]
+                    multi_modal_data["image"] = images
 
-            model_inputs = self.processor(text=[raw_prompt], images=images, videos=videos, return_tensors="pt")
+                videos = None
+                if self.video_key in row_dict:
+                    videos = [process_video(video) for video in row_dict.get(self.video_key)]
+                    multi_modal_data["video"] = [video.numpy() for video in videos]
 
-            input_ids = model_inputs.pop("input_ids")
-            attention_mask = model_inputs.pop("attention_mask")
+                model_inputs = self.processor(text=[raw_prompt], images=images, videos=videos, return_tensors="pt")
 
-            if "second_per_grid_ts" in model_inputs:
-                model_inputs.pop("second_per_grid_ts")
+                input_ids = model_inputs.pop("input_ids")
+                attention_mask = model_inputs.pop("attention_mask")
 
-            # There's a trap here, multi_modal_inputs has to be a dict, not BatchFeature
-            row_dict["multi_modal_data"] = multi_modal_data
-            row_dict["multi_modal_inputs"] = dict(model_inputs)
+                if "second_per_grid_ts" in model_inputs:
+                    model_inputs.pop("second_per_grid_ts")
 
-            # second_per_grid_ts isn't used for training, just for mrope
-            row_dict["multi_modal_inputs"].pop("second_per_grid_ts", None)
+                # There's a trap here, multi_modal_inputs has to be a dict, not BatchFeature
+                row_dict["multi_modal_data"] = multi_modal_data
+                row_dict["multi_modal_inputs"] = dict(model_inputs)
+
+                # second_per_grid_ts isn't used for training, just for mrope
+                row_dict["multi_modal_inputs"].pop("second_per_grid_ts", None)
 
         else:
             raw_prompt = self.tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)

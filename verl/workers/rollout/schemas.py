@@ -23,6 +23,7 @@ from transformers import PreTrainedTokenizer, PreTrainedTokenizerFast, Processor
 
 from verl.tools.schemas import OpenAIFunctionToolCall, OpenAIFunctionToolSchema
 from verl.utils.model import compute_position_id_with_mask
+from verl.utils.dataset.vision_utils import process_image, process_video
 
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
@@ -74,6 +75,7 @@ class AsyncRolloutRequest(BaseModel):
     state: AsyncRolloutRequestStateEnum
     messages: List[Message]
     multi_modal_data: Optional[Dict[str, Any]] = None
+    multi_modal_inputs: Optional[Dict[str, Any]] = None
     tool_schemas: Optional[List[OpenAIFunctionToolSchema]] = None
     tools_kwargs: Dict[str, Any] = {}
     input_ids: List[int]
@@ -114,6 +116,9 @@ class AsyncRolloutRequest(BaseModel):
 
         tools = [tool.model_dump() for tool in tool_schemas] if (tool_schemas := values.get("tool_schemas", [])) else None
         multi_modal_data = multi_modal_data if (multi_modal_data := values.get("multi_modal_data", {})) else None
+
+        cls._update_multi_modal_data(messages, multi_modal_data, multi_modal_data)
+
         tokens_without_prompt = cls._handle_apply_chat_template(processing_class, messages, tools=tools, multi_modal_data=multi_modal_data, add_generation_prompt=False, tokenize=True)
         if not values.get("input_ids") or not values.get("attention_mask"):
             tokenization_dict_with_prompt = cls._handle_apply_chat_template(processing_class, messages, tools=tools, multi_modal_data=multi_modal_data, add_generation_prompt=True, tokenize=True, return_dict=True)
@@ -155,7 +160,12 @@ class AsyncRolloutRequest(BaseModel):
                 multi_modal_data = {}
             model_inputs = processing_class(text=[raw_prompt], images=multi_modal_data.get("image", None), videos=multi_modal_data.get("video", None), return_tensors="pt")
             assert model_inputs["input_ids"].shape[0] == 1, "input_ids should be a 1D array"
+
+            #TODO: this tolist will make pixel values to a 1d list, needs to be fixed
             model_inputs = {k: v[0].tolist() if hasattr(v, "tolist") else v for k, v in model_inputs.items()}
+            
+            self._update_multi_modal_inputs(model_inputs, self.multi_modal_data)
+
             if return_dict:
                 return model_inputs
             else:
@@ -175,6 +185,39 @@ class AsyncRolloutRequest(BaseModel):
 
         assert len(self.input_ids) == len(self.attention_mask) == len(self.position_ids) == len(self.loss_mask), f"""Request {self.request_id} has different length of {len(self.input_ids)=}, 
             {len(self.attention_mask)=}, {len(self.position_ids)=}, {len(self.loss_mask)=}"""
+
+    def _update_multi_modal_data(self, messages: List[Message], multi_modal_data: Dict[str, Any], delta_multi_modal: Dict[str, Any]) -> None:
+        
+        for _msg in messages:
+            msg = _msg.model_dump()
+            if isinstance(msg["content"], list):
+                for content in msg["content"]:
+                    if content.get("type") == "image":
+                        if "image" not in delta_multi_modal:
+                            delta_multi_modal["image"] = []
+                        if "image" not in multi_modal_data:
+                            multi_modal_data["image"] = []
+                        delta_multi_modal["image"].append(process_image(content["content"]))
+                        multi_modal_data["image"].append(process_image(content["content"]))
+                    elif content.get("type") == "video":
+                        if "video" not in delta_multi_modal:
+                            delta_multi_modal["video"] = []
+                        if "video" not in multi_modal_data:
+                            multi_modal_data["video"] = []
+                        delta_multi_modal["video"].append(process_video(content["content"]))
+                        multi_modal_data["video"].append(process_video(content["content"]))
+
+    def _update_multi_modal_inputs(self, model_inputs, multi_modal_inputs):
+
+        for key in ["pixel_values", "image_grid_thw"]:
+            if key in model_inputs:
+                if multi_modal_inputs.get(key) is None:
+                    multi_modal_inputs[key] = model_inputs[key]
+                else:
+                    multi_modal_inputs[key] = torch.cat([multi_modal_inputs[key], model_inputs[key]])
+
+
+
 
     def get_generation_prompt_ids(self, processing_class: Union[PreTrainedTokenizer, PreTrainedTokenizerFast, ProcessorMixin]) -> list[int]:
         generation_prompt_ids = [] if self.input_ids[-len(self.generation_prompt_ids) :] == self.generation_prompt_ids else self.generation_prompt_ids
@@ -205,7 +248,13 @@ class AsyncRolloutRequest(BaseModel):
     def add_tool_response_messages(self, processing_class: Union[PreTrainedTokenizer, PreTrainedTokenizerFast, ProcessorMixin], contents: list[str]) -> None:
         if not contents:
             return
-        self.messages.extend([Message(role="tool", content=content) for content in contents])
+
+        messages = [Message(role="tool", content=content) for content in contents]
+        self.messages.extend(messages)
+
+        delta_multi_modal_data = {}
+        for msg in messages:
+            self._update_multi_modal_data(msg, self.multi_modal_data, delta_multi_modal_data)
 
         messages = [*BASE_CHAT_HISTORY, *self.messages[-len(contents) :]]
         tools = [tool.model_dump() for tool in self.tool_schemas] if self.tool_schemas else None
