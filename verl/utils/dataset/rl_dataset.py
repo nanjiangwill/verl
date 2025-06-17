@@ -204,14 +204,13 @@ class RLHFDataset(Dataset):
                 multi_modal_data = {}
 
                 images = None
-                #TODO: temp pop => get
                 if self.image_key in row_dict:
-                    images = [process_image(image) for image in row_dict.get(self.image_key)]
+                    images = [process_image(image) for image in row_dict.pop(self.image_key)]
                     multi_modal_data["image"] = images
 
                 videos = None
                 if self.video_key in row_dict:
-                    videos = [process_video(video) for video in row_dict.get(self.video_key)]
+                    videos = [process_video(video) for video in row_dict.pop(self.video_key)]
                     multi_modal_data["video"] = [video.numpy() for video in videos]
 
                 model_inputs = self.processor(text=[raw_prompt], images=images, videos=videos, return_tensors="pt")
