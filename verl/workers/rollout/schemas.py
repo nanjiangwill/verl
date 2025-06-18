@@ -24,6 +24,7 @@ from transformers import PreTrainedTokenizer, PreTrainedTokenizerFast, Processor
 from verl.tools.schemas import OpenAIFunctionToolCall, OpenAIFunctionToolSchema
 from verl.utils.model import compute_position_id_with_mask
 from verl.utils.dataset.vision_utils import process_image, process_video
+import uuid
 
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
@@ -74,8 +75,8 @@ class AsyncRolloutRequest(BaseModel):
     request_id: str
     state: AsyncRolloutRequestStateEnum
     messages: List[Message]
-    multi_modal_data: Optional[Dict[str, Any]] = None
-    multi_modal_inputs: Optional[Dict[str, Any]] = None
+    multi_modal_data: Optional[Dict[str, Any]] = {}
+    multi_modal_inputs: Optional[Dict[str, Any]] = {}
     tool_schemas: Optional[List[OpenAIFunctionToolSchema]] = None
     tools_kwargs: Dict[str, Any] = {}
     input_ids: List[int]
@@ -115,15 +116,18 @@ class AsyncRolloutRequest(BaseModel):
         values["messages"] = [Message.model_validate(msg) for msg in messages]
 
         tools = [tool.model_dump() for tool in tool_schemas] if (tool_schemas := values.get("tool_schemas", [])) else None
-        multi_modal_data = multi_modal_data if (multi_modal_data := values.get("multi_modal_data", {})) else None
-
-        cls._update_multi_modal_data(messages, multi_modal_data, multi_modal_data)
-
-        tokens_without_prompt = cls._handle_apply_chat_template(processing_class, messages, tools=tools, multi_modal_data=multi_modal_data, add_generation_prompt=False, tokenize=True)
+        
+        tokens_without_prompt = cls._handle_apply_chat_template(processing_class, messages, tools=tools, multi_modal_data=values["multi_modal_data"], add_generation_prompt=False, tokenize=True)
         if not values.get("input_ids") or not values.get("attention_mask"):
-            tokenization_dict_with_prompt = cls._handle_apply_chat_template(processing_class, messages, tools=tools, multi_modal_data=multi_modal_data, add_generation_prompt=True, tokenize=True, return_dict=True)
+            cls._update_multi_modal_data(messages, {}, values["multi_modal_data"])
+            
+            tokenization_dict_with_prompt = cls._handle_apply_chat_template(processing_class, messages, tools=tools, multi_modal_data=values["multi_modal_data"], add_generation_prompt=True, tokenize=True, return_dict=True)
 
             values["input_ids"], values["attention_mask"] = tokenization_dict_with_prompt["input_ids"], tokenization_dict_with_prompt["attention_mask"]
+            
+            
+            cls._update_multi_modal_inputs(tokenization_dict_with_prompt, values["multi_modal_inputs"])
+
             if len(values["input_ids"]) > max_prompt_len:
                 # Only log the warning to avoid truncating in the middle of generation prompt. Consider raising an error for this case in the future.
                 logger.warning(f"Prompt {values['batch_data_id']} length {len(values['input_ids'])} greater than max_prompt_len {max_prompt_len} after applied chat template with tools.")
@@ -132,8 +136,8 @@ class AsyncRolloutRequest(BaseModel):
         values["position_ids"] = values["prompt_position_ids"] = compute_position_id_with_mask(torch.tensor(values["attention_mask"])).tolist()
         values["loss_mask"] = values["prompt_loss_mask"] = [0] * len(values["input_ids"])
         values["generation_prompt_ids"] = values["input_ids"][len(tokens_without_prompt) :]
-        values["base_conv_wo_gen_prompt_end_pos"] = len(cls._handle_apply_chat_template(processing_class, BASE_CHAT_HISTORY, tools=tools, multi_modal_data=multi_modal_data, add_generation_prompt=False, tokenize=True))
-        values["base_conv_with_gen_prompt_end_pos"] = len(cls._handle_apply_chat_template(processing_class, BASE_CHAT_HISTORY, tools=tools, multi_modal_data=multi_modal_data, add_generation_prompt=True, tokenize=True))
+        values["base_conv_wo_gen_prompt_end_pos"] = len(cls._handle_apply_chat_template(processing_class, BASE_CHAT_HISTORY, tools=tools, multi_modal_data=None, add_generation_prompt=False, tokenize=True))
+        values["base_conv_with_gen_prompt_end_pos"] = len(cls._handle_apply_chat_template(processing_class, BASE_CHAT_HISTORY, tools=tools, multi_modal_data=None, add_generation_prompt=True, tokenize=True))
 
         return values
 
@@ -161,10 +165,9 @@ class AsyncRolloutRequest(BaseModel):
             model_inputs = processing_class(text=[raw_prompt], images=multi_modal_data.get("image", None), videos=multi_modal_data.get("video", None), return_tensors="pt")
             assert model_inputs["input_ids"].shape[0] == 1, "input_ids should be a 1D array"
 
-            #TODO: this tolist will make pixel values to a 1d list, needs to be fixed
-            model_inputs = {k: v[0].tolist() if hasattr(v, "tolist") else v for k, v in model_inputs.items()}
-            
-            self._update_multi_modal_inputs(model_inputs, self.multi_modal_data)
+            # model_inputs = {k: v[0].tolist() if hasattr(v, "tolist") and (k is in ["input_ids", ]) else v for k, v in model_inputs.items()}
+            model_inputs["input_ids"] = model_inputs["input_ids"][0].tolist()
+            model_inputs["attention_mask"] = model_inputs["attention_mask"][0].tolist()
 
             if return_dict:
                 return model_inputs
@@ -186,36 +189,36 @@ class AsyncRolloutRequest(BaseModel):
         assert len(self.input_ids) == len(self.attention_mask) == len(self.position_ids) == len(self.loss_mask), f"""Request {self.request_id} has different length of {len(self.input_ids)=}, 
             {len(self.attention_mask)=}, {len(self.position_ids)=}, {len(self.loss_mask)=}"""
 
-    def _update_multi_modal_data(self, messages: List[Message], multi_modal_data: Dict[str, Any], delta_multi_modal: Dict[str, Any]) -> None:
+    @staticmethod
+    def _update_multi_modal_data(messages: List[Message], delta_multi_modal_data: Dict[str, Any], multi_modal_data: Dict[str, Any]) -> None:
         
-        for _msg in messages:
-            msg = _msg.model_dump()
+        for msg in messages:
             if isinstance(msg["content"], list):
                 for content in msg["content"]:
                     if content.get("type") == "image":
-                        if "image" not in delta_multi_modal:
-                            delta_multi_modal["image"] = []
+                        if "image" not in delta_multi_modal_data:
+                            delta_multi_modal_data["image"] = []
                         if "image" not in multi_modal_data:
                             multi_modal_data["image"] = []
-                        delta_multi_modal["image"].append(process_image(content["content"]))
-                        multi_modal_data["image"].append(process_image(content["content"]))
+                        delta_multi_modal_data["image"].append(process_image(content["image"]))
+                        multi_modal_data["image"].append(process_image(content["image"]))
                     elif content.get("type") == "video":
-                        if "video" not in delta_multi_modal:
-                            delta_multi_modal["video"] = []
+                        if "video" not in delta_multi_modal_data:
+                            delta_multi_modal_data["video"] = []
                         if "video" not in multi_modal_data:
                             multi_modal_data["video"] = []
-                        delta_multi_modal["video"].append(process_video(content["content"]))
-                        multi_modal_data["video"].append(process_video(content["content"]))
+                        delta_multi_modal_data["video"].append(process_video(content["video"]))
+                        multi_modal_data["video"].append(process_video(content["video"]))
 
-    def _update_multi_modal_inputs(self, model_inputs, multi_modal_inputs):
-
+    @staticmethod
+    def _update_multi_modal_inputs(delta_multi_model_inputs, multi_modal_inputs):
+        
         for key in ["pixel_values", "image_grid_thw"]:
-            if key in model_inputs:
+            if key in delta_multi_model_inputs:
                 if multi_modal_inputs.get(key) is None:
-                    multi_modal_inputs[key] = model_inputs[key]
+                    multi_modal_inputs[key] = delta_multi_model_inputs[key]
                 else:
-                    multi_modal_inputs[key] = torch.cat([multi_modal_inputs[key], model_inputs[key]])
-
+                    multi_modal_inputs[key] = torch.cat([multi_modal_inputs[key], delta_multi_model_inputs[key]])
 
 
 
@@ -245,20 +248,22 @@ class AsyncRolloutRequest(BaseModel):
         content_ids = self._handle_apply_chat_template(processing_class, messages, tools=tools, add_generation_prompt=False, tokenize=True)[self.base_conv_with_gen_prompt_end_pos :]
         self._update_input_ids(content_ids, attention_mask=True, loss_mask=True)
 
-    def add_tool_response_messages(self, processing_class: Union[PreTrainedTokenizer, PreTrainedTokenizerFast, ProcessorMixin], contents: list[str]) -> None:
+    def add_tool_response_messages(self, processing_class: Union[PreTrainedTokenizer, PreTrainedTokenizerFast, ProcessorMixin], contents: list[str | dict]) -> None:
         if not contents:
             return
 
         messages = [Message(role="tool", content=content) for content in contents]
         self.messages.extend(messages)
 
-        delta_multi_modal_data = {}
-        for msg in messages:
-            self._update_multi_modal_data(msg, self.multi_modal_data, delta_multi_modal_data)
+        for msg in [Message.model_dump(msg) for msg in messages]:
+            delta_multi_modal_data = {}
+            self._update_multi_modal_data([msg], delta_multi_modal_data, self.multi_modal_data)
 
         messages = [*BASE_CHAT_HISTORY, *self.messages[-len(contents) :]]
         tools = [tool.model_dump() for tool in self.tool_schemas] if self.tool_schemas else None
-        content_ids = self._handle_apply_chat_template(processing_class, messages, tools=tools, multi_modal_data=delta_multi_modal_data, add_generation_prompt=False, tokenize=True)[self.base_conv_wo_gen_prompt_end_pos :]
+        model_inputs = self._handle_apply_chat_template(processing_class, messages, tools=tools, multi_modal_data=delta_multi_modal_data, add_generation_prompt=False, tokenize=True, return_dict=True)
+        self._update_multi_modal_inputs(model_inputs, self.multi_modal_inputs)
+        content_ids = model_inputs["input_ids"][self.base_conv_wo_gen_prompt_end_pos :]
         self._update_input_ids(content_ids, attention_mask=True, loss_mask=False)
 
     def update_metrics(self, metrics: Any, tool_id: str) -> None:
