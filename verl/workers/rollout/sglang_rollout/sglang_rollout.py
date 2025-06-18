@@ -742,15 +742,6 @@ class SGLangRollout(BaseRollout):
         finish_reason_type = None
         output = None
 
-        image_data = None
-        video_data = None
-        if _req.multi_modal_data is not None and isinstance(_req.multi_modal_data, dict):
-            if "image" in _req.multi_modal_data and _req.multi_modal_data["image"]:
-                image_data = _req.multi_modal_data["image"]
-            if "video" in _req.multi_modal_data and _req.multi_modal_data["video"]:
-                video_data = _req.multi_modal_data["video"]
-                logger.warning("video support is not implemented yet, current length of video data is %d", len(video_data))
-
         current_turns = 0
 
         # Create request-level sampling parameters
@@ -818,7 +809,7 @@ class SGLangRollout(BaseRollout):
                     finish_reason_type = FinishReasonTypeEnum.LENGTH
                     break
                 # Video support is not implemented yet
-                output = await self._handle_engine_call(_req, request_sampling_params, image_data=image_data)
+                output = await self._handle_engine_call(_req, request_sampling_params)
                 content = output["text"]
                 finish_reason_type = FinishReasonTypeEnum.from_str(output["meta_info"]["finish_reason"]["type"])
                 current_turns += 1
@@ -884,7 +875,17 @@ class SGLangRollout(BaseRollout):
 
         return _req
 
-    async def _handle_engine_call(self, _req: AsyncRolloutRequest, sampling_params: dict, image_data: Optional[list[Any]] = None) -> dict:
+    async def _handle_engine_call(self, _req: AsyncRolloutRequest, sampling_params: dict) -> dict:
+        
+        image_data = None
+        video_data = None
+        if _req.multi_modal_data is not None and isinstance(_req.multi_modal_data, dict):
+            if "image" in _req.multi_modal_data and _req.multi_modal_data["image"]:
+                image_data = _req.multi_modal_data["image"]
+            if "video" in _req.multi_modal_data and _req.multi_modal_data["video"]:
+                video_data = _req.multi_modal_data["video"]
+                logger.warning("video support is not implemented yet, current length of video data is %d", len(video_data))
+        
         generation_prompt_ids = _req.get_generation_prompt_ids(self.processing_class)
         max_new_tokens = min(self.config.response_length, self.config.max_model_len - len(generation_prompt_ids) - 1)
         kwargs = sampling_params.copy()
