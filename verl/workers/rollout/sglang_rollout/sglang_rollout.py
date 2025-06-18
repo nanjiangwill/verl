@@ -953,6 +953,7 @@ class SGLangRollout(BaseRollout):
         prompt_position_ids, response_position_ids = [], []
         prompt_loss_mask, response_loss_mask = [], []
         messages = []
+        multi_modal_inputs = []
         reward_scores = []
         for req in sorted_output_req_list:
             assert req.state == AsyncRolloutRequestStateEnum.COMPLETED, f"Request {req.request_id} is not completed"
@@ -984,6 +985,7 @@ class SGLangRollout(BaseRollout):
             prompt_loss_mask.append(torch.tensor(req.prompt_loss_mask, dtype=torch.int, device=tgt_device))
             response_loss_mask.append(torch.tensor(req.response_loss_mask, dtype=torch.int, device=tgt_device))
             messages.append({"messages": req.messages})
+            multi_modal_inputs.append(req.multi_modal_inputs)
             reward_scores.append(req.reward_scores)
 
         prompt_ids = pad_sequence(
@@ -1044,12 +1046,13 @@ class SGLangRollout(BaseRollout):
         if self.config.free_cache_engine and self._engine is not None and self._tp_rank == 0:
             loop = asyncio.get_event_loop()
             loop.run_until_complete(self._engine.flush_cache())
-
+        import pdb;pdb.set_trace()
         return DataProto(
             batch=batch,
             non_tensor_batch={
                 "messages": np.array(messages),
                 "reward_scores": np.array(reward_scores),
+                "multi_modal_inputs": np.array(multi_modal_inputs),
             },
         )
 
@@ -1076,7 +1079,8 @@ class SGLangRollout(BaseRollout):
                     request_id=str(uuid4()),
                     state=AsyncRolloutRequestStateEnum.PENDING,
                     messages=raw_prompt.tolist(),
-                    multi_modal_data=multi_modal_data,
+                    multi_modal_data={},
+                    multi_modal_inputs={},
                     tool_schemas=_tool_schemas,
                     tools_kwargs=_tools_kwargs,
                     input_ids=_input_ids,
