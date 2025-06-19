@@ -1,0 +1,16 @@
+tools:
+  - class_name: "verl.tools.android_world_tool.AndroidWorldTool"
+    config:
+      android_world_url: "https://localhost/android"
+    tool_schema:
+      type: "function"
+      function:
+        name: "android_action"
+        description: "Perform an action in the Android world."
+        parameters:
+          type: "object"
+          properties:
+            action:
+              type: "string"
+              description: "The action to perform."
+          required: ["action"]
