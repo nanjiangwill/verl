@@ -205,6 +205,13 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         self.tokenizer = hf_tokenizer(local_path, trust_remote_code=trust_remote_code)
         self.processor = hf_processor(local_path, trust_remote_code=trust_remote_code)
 
+        if self.config.model.get("custom_chat_template", None) is not None:
+            custom_chat_template = json.load(open(self.config.model.custom_chat_template)).get("chat_template", None)
+            if self.processor is not None:
+                self.processor.chat_template = custom_chat_template
+            else:
+                self.tokenizer.chat_template = custom_chat_template
+
         torch_dtype = fsdp_config.get("model_dtype", None)
         if torch_dtype is None:
             torch_dtype = torch.float32 if self._is_actor else torch.bfloat16
@@ -463,7 +470,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             rollout = SGLangRollout(
                 actor_module=local_path,
                 config=self.config.rollout,
-                tokenizer=self.tokenizer,
+                processing_class=self.processor if self.processor is not None else self.tokenizer,
                 model_hf_config=self.actor_model_config,
                 trust_remote_code=trust_remote_code,
             )
