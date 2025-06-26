@@ -87,8 +87,18 @@ class MCPBaseTool(BaseTool):
             # Store results in instance dictionary
             self._instance_dict[instance_id]["reward"].append(result_text.strip())
 
-            # Convert metadata to metrics
-            metrics = {"query_count": metadata.get("query_count", 0), "status": metadata.get("status", "unknown"), "total_results": metadata.get("total_results", 0), "api_request_error": metadata.get("api_request_error")}
+            metrics = {
+                "query_count": metadata.get("query_count", 0),
+                "status": metadata.get("status", "unknown"),
+                "total_results": metadata.get("total_results", 0),
+                "api_request_error": metadata.get("api_request_error"),
+            }
+            self.record_step_result(
+                parameters=parameters,
+                response=result_text,
+                reward=0.0,
+                metrics=metrics,
+            )
 
             return result_text, 0.0, metrics
 
@@ -97,7 +107,7 @@ class MCPBaseTool(BaseTool):
             logger.error(f"[MCPBaseTool] Execution failed: {e}")
             return error_result, 0.0, {"error": str(e)}
 
-    async def calc_reward(self, instance_id: str, **kwargs) -> str:
+    async def calc_final_reward(self, instance_id: str, **kwargs) -> str:
         return self._instance_dict[instance_id]["reward"]
 
     async def release(self, instance_id: str, **kwargs) -> None:

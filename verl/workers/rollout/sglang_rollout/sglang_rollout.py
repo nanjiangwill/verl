@@ -802,6 +802,7 @@ class SGLangRollout(BaseRollout):
                     _req.add_tool_response_messages(self.processing_class, [resp for resp, _, _ in tool_call_results])
                     for tool_call, (resp, reward, metrics) in zip(parsed_tool_calls, tool_call_results):
                         _req.update_metrics(metrics, tool_call.function.name)
+                        _req.reward_scores.setdefault(tool_call.function.name, []).append(reward)
                     if len(_req.input_ids) >= self.config.max_model_len:
                         finish_reason_type = FinishReasonTypeEnum.STOP
                         break
@@ -889,7 +890,9 @@ class SGLangRollout(BaseRollout):
 
         # Calculate the reward for each tool
         async def calc_reward_and_release_fn(name: str, tool: BaseTool):
-            reward = await tool.calc_reward(_req.request_id, **_req.tools_kwargs[name].get("calc_reward_kwargs", {}))
+            reward = await tool.calc_final_reward(
+                _req.request_id, **_req.tools_kwargs[name].get("calc_reward_kwargs", {})
+            )
             await tool.release(_req.request_id, **_req.tools_kwargs[name].get("release_kwargs", {}))
             return name, reward
 
@@ -899,7 +902,10 @@ class SGLangRollout(BaseRollout):
             tool_reward_tasks.append(calc_reward_and_release_fn(name, tool))
         tool_reward_scores = await asyncio.gather(*tool_reward_tasks)
         tool_reward_scores = dict(tool_reward_scores)
-        all_rewards = {**tool_reward_scores, **{"user_turn_rewards": user_turn_rewards}}
+        all_rewards = {
+            **tool_reward_scores,
+            **{"user_turn_rewards": user_turn_rewards, "tool_step_rewards": _req.reward_scores},
+        }
         _req.finalize(self.processing_class, all_rewards, finish_reason_type)
 
         return _req

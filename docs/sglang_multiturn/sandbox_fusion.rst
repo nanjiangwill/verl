@@ -184,7 +184,7 @@ Tool Implementation
             else:
                 return "no stdout here"
 
-       async def calc_reward(self, instance_id: str, ...):
+       async def calc_final_reward(self, instance_id: str, ...):
            ...
 
        async def release(self, instance_id: str, ...):
