@@ -99,7 +99,7 @@ class SandboxFusionTool(BaseTool):
     - `to_openai_function_tool_schema`: return the tool schema in OpenAI format.
     - `create`: create a tool instance for a trajectory.
     - `execute`: execute the tool.
-    - `calc_reward`: calculate the reward respect to tool state.
+    - `calc_final_reward`: calculate the reward respect to tool state.
     - `release`: release the tool instance.
     """
 
@@ -159,8 +159,17 @@ class SandboxFusionTool(BaseTool):
         if not isinstance(code, str):
             code = str(code)
 
-        result = await self.execution_pool.execute.remote(self.execute_code, instance_id, code, timeout, language)
+        result = await self.execution_pool.execute.remote(
+            self.execute_code, instance_id, code, timeout, language
+        )
 
+        metrics: dict = {}
+        self.record_step_result(
+            parameters=parameters,
+            response=result,
+            reward=result,
+            metrics=metrics,
+        )
         return result, result, result.strip()
 
     def execute_code(self, instance_id, code, timeout=30, language="python"):
@@ -173,7 +182,7 @@ class SandboxFusionTool(BaseTool):
         else:
             return "no stdout here"
 
-    async def calc_reward(self, instance_id: str, **kwargs) -> str:
+    async def calc_final_reward(self, instance_id: str, **kwargs) -> str:
         return self._instance_dict[instance_id]["reward"]
 
     async def release(self, instance_id: str, **kwargs) -> None:

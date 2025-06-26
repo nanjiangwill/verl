@@ -31,7 +31,7 @@ class BaseTool:
     - `to_openai_function_tool_schema`: return the tool schema in OpenAI format.
     - `create`: create a tool instance for a trajectory.
     - `execute`: execute the tool.
-    - `calc_reward`: calculate the reward respect to tool state.
+    - `calc_final_reward`: calculate the final reward with respect to tool state.
     - `release`: release the tool instance.
     """
 
@@ -41,6 +41,27 @@ class BaseTool:
         assert self.tool_schema is not None, "Tool schema is not set!"
         self.name = self.tool_schema.function.name
         print(json.dumps(self.tool_schema.model_dump(exclude_unset=True, exclude_none=True), indent=2))
+        # Buffer to record step results
+        self.replay_buffer: list = []
+
+    def record_step_result(
+        self,
+        *,
+        parameters: Optional[dict] = None,
+        response: Optional[Any] = None,
+        reward: Optional[Any] = None,
+        metrics: Optional[dict] = None,
+    ) -> None:
+        """Record a single tool call result for replay."""
+
+        self.replay_buffer.append(
+            {
+                "parameters": parameters,
+                "response": response,
+                "reward": reward,
+                "metrics": metrics,
+            }
+        )
 
     def get_openai_tool_schema(self) -> OpenAIFunctionToolSchema:
         return self.tool_schema
@@ -71,9 +92,15 @@ class BaseTool:
             tool_reward_score: The step reward score of the tool.
             tool_metrics: The metrics of the tool.
         """
-        return "Updated the tool state.", 0.0, {}
+        reward = 0.0
+        response = "Updated the tool state."
+        metrics: dict = {}
+        self.record_step_result(
+            parameters=parameters, response=response, reward=reward, metrics=metrics
+        )
+        return response, reward, metrics
 
-    async def calc_reward(self, instance_id: str, **kwargs) -> float:
+    async def calc_final_reward(self, instance_id: str, **kwargs) -> float:
         """Calculate the reward of the tool.
 
         Args:

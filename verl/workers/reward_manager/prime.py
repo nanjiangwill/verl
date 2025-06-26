@@ -121,21 +121,21 @@ class PrimeRewardManager:
         extra_info = data.non_tensor_batch.get("extra_info", None)
 
         assert len(sequences_str) == len(ground_truth) == len(data_sources)
-        try:
-            scores = run_reward_scoring(
-                self.compute_score,
-                completions=sequences_str,
-                references=ground_truth,
-                tasks=data_sources,
-                extra_info=extra_info,
-                num_processes=64,
-            )
-        except asyncio.TimeoutError:
-            print("[Timeout] Global reward scoring timed out. Setting all as 0.")
-            scores = [0.0 for _ in range(len(sequences_str))]
-        except Exception as e:
-            print(f"[Error] Unexpected error during scoring. Setting all as 0. {e}")
-            scores = [0.0 for _ in range(len(sequences_str))]
+        scores = []
+        for sol, gt, ds, ei in zip(sequences_str, ground_truth, data_sources, extra_info or [None] * len(sequences_str)):
+            if isinstance(ei, dict) and "reward" in ei:
+                scores.append(ei["reward"])
+            else:
+                try:
+                    score = self.compute_score(
+                        data_source=ds,
+                        solution_str=sol,
+                        ground_truth=gt,
+                        extra_info=ei,
+                    )
+                except Exception:
+                    score = 0.0
+                scores.append(score if not isinstance(score, dict) else score.get("score", 0.0))
         data.batch["acc"] = torch.tensor(scores, dtype=torch.float32, device=prompt_ids.device)
         return scores
 

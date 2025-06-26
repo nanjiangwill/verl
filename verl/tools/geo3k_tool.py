@@ -33,7 +33,7 @@ class Geo3kTool(BaseTool):
     - `to_openai_function_tool_schema`: return the tool schema in OpenAI format.
     - `create`: create a tool instance for a trajectory.
     - `execute`: execute the tool.
-    - `calc_reward`: calculate the reward respect to tool state.
+    - `calc_final_reward`: calculate the reward respect to tool state.
     - `release`: release the tool instance.
     """
 
@@ -78,14 +78,22 @@ class Geo3kTool(BaseTool):
         if not isinstance(answer, str):
             answer = str(answer)
         self._instance_dict[instance_id]["response"] = answer
-        reward = await self.calc_reward(instance_id)
+        reward = await self.calc_final_reward(instance_id)
         # penalty for non improved answer submission
         tool_reward = 0.0 if reward > self._instance_dict[instance_id]["reward"] else -0.05
         # update the reward
         self._instance_dict[instance_id]["reward"] = reward
-        return f"Current parsed {answer=} {reward=}", tool_reward, {}
+        response = f"Current parsed {answer=} {reward=}"
+        metrics: dict = {}
+        self.record_step_result(
+            parameters=parameters,
+            response=response,
+            reward=tool_reward,
+            metrics=metrics,
+        )
+        return response, tool_reward, metrics
 
-    async def calc_reward(self, instance_id: str, **kwargs) -> float:
+    async def calc_final_reward(self, instance_id: str, **kwargs) -> float:
         return geo3k.compute_score(
             self._instance_dict[instance_id]["response"],
             self._instance_dict[instance_id]["ground_truth"],
