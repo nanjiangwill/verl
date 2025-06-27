@@ -52,7 +52,7 @@ class FinishReasonTypeEnum(str, Enum):
 
 class Message(BaseModel):
     role: str
-    content: str | Dict[str, Any] | List[Dict[str, Any]]
+    content: str | List[str] | Dict[str, Any] | List[Dict[str, Any]]
     tool_calls: Optional[List[OpenAIFunctionToolCall]] = None
 
 
