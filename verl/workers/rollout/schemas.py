@@ -257,8 +257,8 @@ class AsyncRolloutRequest(BaseModel):
         # We require the processing of the image and video to be done at tool.execute() level
         delta_multi_modal_data = {key: [] for key in self.multi_modal_keys}
         for content in contents:
-            content_list = []
             if isinstance(content, dict):
+                content_list = []
                 # When we update multi_model_keys, we also need to update this logic
                 if "image" in content:
                     if not isinstance(content["image"], list):
@@ -274,9 +274,9 @@ class AsyncRolloutRequest(BaseModel):
                     delta_multi_modal_data["video"].extend(content["video"])
                 else:
                     content_list.append({"type": "text", "text": content["text"]})
+                self.messages.append(Message(role="tool", content=content_list))
             else:
-                content_list.append(content)
-            self.messages.append(Message(role="tool", content=content_list))
+                self.messages.append(Message(role="tool", content=content))
 
         messages = [*BASE_CHAT_HISTORY, *self.messages[-len(contents) :]]
         tools = [tool.model_dump() for tool in self.tool_schemas] if self.tool_schemas else None
