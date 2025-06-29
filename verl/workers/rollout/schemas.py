@@ -183,11 +183,10 @@ class AsyncRolloutRequest(BaseModel):
             assert model_inputs["input_ids"].shape[0] == 1, "request level input_ids should be a 2D array with shape (1, seq_len)"
             assert model_inputs["attention_mask"].shape[0] == 1, "request level attention_mask should be a 2D array with shape (1, seq_len)"
 
-            # current req level input_ids/attention_mask needs to be 1D array
-            model_inputs["input_ids"] = model_inputs["input_ids"][0]
-            model_inputs["attention_mask"] = model_inputs["attention_mask"][0]
+            # current req level input_ids/attention_mask needs to be 1D array, this is specific for request level input_ids/attention_mask
+            model_inputs["input_ids"] = model_inputs["input_ids"][0].tolist()
+            model_inputs["attention_mask"] = model_inputs["attention_mask"][0].tolist()
 
-            model_inputs = {k: v.tolist() if hasattr(v, "tolist") else v for k, v in model_inputs.items()}
             if return_dict:
                 return model_inputs
             else:
@@ -363,8 +362,9 @@ class AsyncRolloutRequest(BaseModel):
         full_prompt_info = self._handle_apply_chat_template(processing_class, messages, multi_modal_data=self.multi_modal_data, tools=tools, add_generation_prompt=False, tokenize=True, return_dict=True)
         full_prompt_ids = full_prompt_info["input_ids"]
 
-        # prepare the multi_modal_inputs
-        self.multi_modal_inputs = full_prompt_info.copy()
+        # We must use dict(full_prompt_info) to convert BatchFeature values to a new dict to avoid np.array() only keeping the keys
+        # TODO: we need to update this approach to incremental update, right now we are still get all multi_modal_data at the end of the request
+        self.multi_modal_inputs = dict(full_prompt_info)
         self.multi_modal_inputs.pop("input_ids", None)
         self.multi_modal_inputs.pop("attention_mask", None)
 
