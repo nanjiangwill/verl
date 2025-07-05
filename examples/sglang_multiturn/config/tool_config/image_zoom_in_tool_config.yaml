@@ -1,5 +1,5 @@
 tools:
-  - class_name: "verl.tools.image_zone_in_tool.ImageZoomInTool"
+  - class_name: "verl.tools.image_zoom_in_tool.ImageZoomInTool"
     config:
       type: native
     tool_schema:
