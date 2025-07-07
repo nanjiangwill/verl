@@ -88,7 +88,18 @@ class ImageZoomInTool(BaseTool):
         try:
             left, top, right, bottom = bbox_2d
             cropped_image = image.crop((left, top, right, bottom))
-            cropped_image.save(f"cropped_image_{instance_id}.png")
+            
+            # Check if cropped image dimensions are too small and resize proportionally
+            width, height = cropped_image.size
+            if width < 28 or height < 28:
+                # Calculate scale factor to make the smaller dimension 28
+                scale_factor = max(28 / width, 28 / height)
+                new_width = int(width * scale_factor)
+                new_height = int(height * scale_factor)
+                cropped_image = cropped_image.resize((new_width, new_height), resample=3)  # 3 = LANCZOS
+                logger.info(f"Resized cropped image from {width}x{height} to {new_width}x{new_height}")
+            
+            # cropped_image.save(f"cropped_image_{instance_id}.png")
         except Exception as e:
             logger.error(f"Error cropping image: {e}")
             return f"Error cropping image: {e}", -0.05, {}
