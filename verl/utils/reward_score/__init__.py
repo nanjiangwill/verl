@@ -102,6 +102,19 @@ def default_compute_score(
 
         res = search_r1_like_qa_em.compute_score(solution_str, ground_truth)
 
+    elif data_source in ['vstar', 'vl_agent', 'chart']:
+        from . import vl_agent
+        res = vl_agent.compute_score(solution_str, ground_truth, extra_info)
+
+    elif data_source in ['geoguessr']:
+        from . import vl_agent
+        res = vl_agent.compute_common_reasoning(solution_str, ground_truth, extra_info)
+
+    elif data_source in ['thinklite_eureka', 'xince']:
+        from . import vl_agent
+        res = vl_agent.compute_score_math(solution_str, ground_truth, extra_info)
+
+
     else:
         raise NotImplementedError(f"Reward function is not implemented for {data_source=}")
 
