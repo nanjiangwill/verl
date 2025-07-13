@@ -111,6 +111,12 @@ class AsyncRolloutRequest(BaseModel):
     max_response_len: int = 8192
     max_model_len: int = 32768
     metrics: Dict[str, List[Any]] = {}
+    
+    # Multi-turn optimization fields
+    multiturn_optimization_method: str = "none"  # MultiTurnOptimizationMethod enum value
+    enable_multiturn_optimization: bool = False
+    custom_attention_mask: Optional[torch.Tensor] = None
+    assistant_ranges: Optional[List[tuple]] = None
 
     use_inference_chat_template: bool
     tokenization_sanity_check_mode: TokenizationSanityCheckModeEnum
@@ -395,15 +401,22 @@ class AsyncRolloutRequest(BaseModel):
     ) -> None:
         self.messages.append(Message(role="assistant", content=content, tool_calls=tool_calls))
 
-        messages = [*BASE_CHAT_HISTORY, self.messages[-1]]
-        tools = [tool.model_dump() for tool in self.tool_schemas] if self.tool_schemas else None
+        # Check if we should use multi-turn optimization
+        if self.enable_multiturn_optimization:
+            # When optimization is enabled, we need to prepare the full conversation
+            # with custom attention masks instead of just appending tokens
+            self._update_conversation_with_optimization(processing_class)
+        else:
+            # Original behavior: just append the new assistant message tokens
+            messages = [*BASE_CHAT_HISTORY, self.messages[-1]]
+            tools = [tool.model_dump() for tool in self.tool_schemas] if self.tool_schemas else None
 
-        # We don't need to pass multi_modal_data here because we don't have any multi-modal data from Engine
-        # Inference, it is pure text.
-        content_ids = self._handle_apply_chat_template(
-            processing_class, messages, multi_modal_data={}, tools=tools, add_generation_prompt=False, tokenize=True
-        )[..., self.base_conv_with_gen_prompt_end_pos :]
-        self._update_input_ids(processing_class, content_ids, attention_mask=True, loss_mask=True)
+            # We don't need to pass multi_modal_data here because we don't have any multi-modal data from Engine
+            # Inference, it is pure text.
+            content_ids = self._handle_apply_chat_template(
+                processing_class, messages, multi_modal_data={}, tools=tools, add_generation_prompt=False, tokenize=True
+            )[..., self.base_conv_with_gen_prompt_end_pos :]
+            self._update_input_ids(processing_class, content_ids, attention_mask=True, loss_mask=True)
 
     def add_tool_response_messages(
         self,
@@ -673,3 +686,73 @@ class AsyncRolloutRequest(BaseModel):
             ..., : self.max_response_len
         ]
         self.response_loss_mask = self.loss_mask[..., self.prompt_loss_mask.shape[-1] :][..., : self.max_response_len]
+
+    def _update_conversation_with_optimization(
+        self, processing_class: Union[PreTrainedTokenizer, PreTrainedTokenizerFast, ProcessorMixin]
+    ) -> None:
+        """
+        Update the conversation using the specified multi-turn optimization method.
+        
+        This method re-processes the entire conversation with custom attention masks
+        when multi-turn optimization is enabled.
+        """
+        from verl.utils.multiturn_forward_utils import prepare_multiturn_inputs, MultiTurnOptimizationMethod
+        
+        # Determine which optimization method to use
+        try:
+            method = MultiTurnOptimizationMethod(self.multiturn_optimization_method)
+        except ValueError:
+            logger.warning(f"Unknown optimization method: {self.multiturn_optimization_method}, using SDPA")
+            method = MultiTurnOptimizationMethod.SDPA
+        
+        # Convert messages to dict format for the utility function
+        messages_dict = [msg.model_dump() for msg in self.messages]
+        tools = [tool.model_dump() for tool in self.tool_schemas] if self.tool_schemas else None
+        
+        try:
+            input_ids, position_ids, attention_mask, assistant_ranges = prepare_multiturn_inputs(
+                processing_class,
+                messages_dict,
+                method=method,
+                tools=tools,
+                max_model_len=self.max_model_len
+            )
+            
+            # Update the request with optimized tensors
+            self.input_ids = input_ids.unsqueeze(0)  # Add batch dimension
+            self.position_ids = position_ids.unsqueeze(0)
+            self.custom_attention_mask = attention_mask
+            self.assistant_ranges = assistant_ranges
+            
+            # Create standard attention mask from custom mask
+            seq_len = input_ids.shape[0]
+            self.attention_mask = torch.ones(1, seq_len, dtype=torch.long)
+            
+            # Create loss mask - only assistant messages should contribute to loss
+            loss_mask = torch.zeros(1, seq_len, dtype=torch.long)
+            for range_tuple in assistant_ranges:
+                if len(range_tuple) == 4:  # SDPA format: (reasoning_start, reasoning_end, clean_start, clean_end)
+                    _, _, clean_start, clean_end = range_tuple
+                    loss_mask[0, clean_start:clean_end] = 1
+                elif len(range_tuple) == 2:  # Simple format: (start, end)
+                    start, end = range_tuple
+                    loss_mask[0, start:end] = 1
+            self.loss_mask = loss_mask
+            
+            logger.info(
+                f"Updated conversation with {method} optimization: "
+                f"seq_len={seq_len}, assistant_ranges={len(assistant_ranges)}"
+            )
+            
+        except Exception as e:
+            logger.warning(f"Failed to update conversation with {method} optimization: {e}, falling back to standard mode")
+            # Fall back to standard processing
+            self.enable_multiturn_optimization = False
+            # Re-process without optimization
+            messages = [*BASE_CHAT_HISTORY, self.messages[-1]]
+            tools = [tool.model_dump() for tool in self.tool_schemas] if self.tool_schemas else None
+            content_ids = self._handle_apply_chat_template(
+                processing_class, messages, multi_modal_data={}, tools=tools, add_generation_prompt=False, tokenize=True
+            )[..., self.base_conv_with_gen_prompt_end_pos :]
+            self._update_input_ids(processing_class, content_ids, attention_mask=True, loss_mask=True)
+

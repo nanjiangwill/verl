@@ -62,6 +62,7 @@ from verl.tools.utils.tool_registry import initialize_tools_from_config
 from verl.utils.net_utils import is_ipv6
 from verl.utils.profiler import GPUMemoryLogger
 from verl.utils.torch_functional import get_response_mask, pad_sequence_to_length
+from verl.utils.multiturn_forward_utils import should_enable_multiturn_optimization, MultiTurnOptimizationMethod
 from verl.workers.rollout.base import BaseRollout
 from verl.workers.rollout.schemas import (
     AsyncRolloutRequest,
@@ -1252,6 +1253,20 @@ class SGLangRollout(BaseRollout):
             else:
                 _interaction_kwargs = {}
 
+            # Check if multi-turn optimization should be enabled and determine method
+            optimization_method = getattr(self.config.multi_turn, 'optimization_method', 'sdpa')
+            try:
+                method = MultiTurnOptimizationMethod(optimization_method)
+            except ValueError:
+                method = MultiTurnOptimizationMethod.SDPA  # Default to SDPA
+            
+            enable_multiturn_optimization = should_enable_multiturn_optimization(
+                self.processing_class,
+                method=method,
+                enable_multiturn=True,  # We're in multi-turn mode
+                force_enable=getattr(self.config.multi_turn, 'force_multiturn_optimization', False)
+            )
+
             req = AsyncRolloutRequest(
                 batch_data_id=data_idx,
                 rollout_offset=0,
@@ -1274,6 +1289,8 @@ class SGLangRollout(BaseRollout):
                 max_model_len=min(self.config.max_model_len, self.config.prompt_length + self.config.response_length),
                 use_inference_chat_template=self.config.multi_turn.use_inference_chat_template,
                 tokenization_sanity_check_mode=self.config.multi_turn.tokenization_sanity_check_mode,
+                multiturn_optimization_method=method.value,
+                enable_multiturn_optimization=enable_multiturn_optimization,
                 processing_class=self.processing_class,
             )
             error_message = f"""Request {req.request_id} has mismatched lengths: 
