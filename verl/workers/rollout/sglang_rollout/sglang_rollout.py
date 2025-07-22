@@ -61,7 +61,7 @@ from verl.tools.schemas import OpenAIFunctionCallSchema, OpenAIFunctionParsedSch
 from verl.tools.utils.tool_registry import initialize_tools_from_config
 from verl.utils.net_utils import is_ipv6
 from verl.utils.profiler import GPUMemoryLogger
-from verl.utils.torch_functional import get_response_mask, pad_sequence_to_length
+from verl.utils.torch_functional import get_response_mask, pad_sequence_to_length, pad_2d_attention_mask_to_length
 from verl.workers.rollout.base import BaseRollout
 from verl.workers.rollout.schemas import (
     AsyncRolloutRequest,
@@ -844,7 +844,7 @@ class SGLangRollout(BaseRollout):
                     tool_call_results = await asyncio.gather(
                         *[
                             self._tool_map[tool_call.function.name].execute(
-                                _req.request_id,
+                                _req,
                                 tool_call.function.arguments,
                                 **_req.tools_kwargs[tool_call.function.name].get("execute_kwargs", {}),
                             )
@@ -1021,7 +1021,7 @@ class SGLangRollout(BaseRollout):
             for tool_schema in _req.tool_schemas:
                 tool = self._tool_map[tool_schema.function.name]
                 create_kwargs = _req.tools_kwargs[tool.name].get("create_kwargs", {})
-                tool_creation_coroutines.append(tool.create(_req.request_id, **create_kwargs))
+                tool_creation_coroutines.append(tool.create(_req, **create_kwargs))
             await asyncio.gather(*tool_creation_coroutines)
         if _req.interaction_kwargs and self.interaction_map:
             interaction_kwargs = _req.interaction_kwargs
@@ -1142,19 +1142,27 @@ class SGLangRollout(BaseRollout):
         response_ids = pad_sequence(response_ids, batch_first=True, padding_value=self.pad_token_id)
         if response_ids.shape[-1] < self.config.response_length:
             response_ids = pad_sequence_to_length(response_ids, self.config.response_length, self.pad_token_id)
-        prompt_attention_mask = pad_sequence(
-            prompt_attention_mask,
-            batch_first=True,
-            padding_value=0,
-            padding_side="left",
-        )
-        if prompt_attention_mask.shape[-1] < self.config.prompt_length:
-            prompt_attention_mask = pad_sequence_to_length(
-                prompt_attention_mask, self.config.prompt_length, 0, left_pad=True
+        
+        # padding attention_mask
+        if prompt_attention_mask[0].dim() == 2 and response_attention_mask[0].dim() == 2:
+            attention_mask = pad_2d_attention_mask_to_length(prompt_attention_mask, response_attention_mask, self.config.prompt_length, self.config.response_length)
+        elif prompt_attention_mask[0].dim() == 2 or response_attention_mask[0].dim() == 2:
+            raise ValueError("if one of the attention_mask is a 2D tensor, the other must be a 2D tensor")
+        else:
+            prompt_attention_mask = pad_sequence(
+                prompt_attention_mask,
+                batch_first=True,
+                padding_value=0,
+                padding_side="left",
             )
-        response_attention_mask = pad_sequence(response_attention_mask, batch_first=True, padding_value=0)
-        if response_attention_mask.shape[-1] < self.config.response_length:
-            response_attention_mask = pad_sequence_to_length(response_attention_mask, self.config.response_length, 0)
+            if prompt_attention_mask.shape[-1] < self.config.prompt_length:
+                prompt_attention_mask = pad_sequence_to_length(
+                    prompt_attention_mask, self.config.prompt_length, 0, left_pad=True
+                )
+
+            response_attention_mask = pad_sequence(response_attention_mask, batch_first=True, padding_value=0)
+            if response_attention_mask.shape[-1] < self.config.response_length:
+                response_attention_mask = pad_sequence_to_length(response_attention_mask, self.config.response_length, 0)
 
         # padding prompt_position_ids
         if prompt_position_ids[0].dim() == 2:
@@ -1281,6 +1289,7 @@ class SGLangRollout(BaseRollout):
                 use_inference_chat_template=self.config.multi_turn.use_inference_chat_template,
                 tokenization_sanity_check_mode=self.config.multi_turn.tokenization_sanity_check_mode,
                 processing_class=self.processing_class,
+                enable_self_context_management=self.config.enable_self_context_management,
             )
             error_message = f"""Request {req.request_id} has mismatched lengths: 
             input_ids={req.input_ids.shape[-1]}, 
@@ -1330,6 +1339,7 @@ class SGLangRollout(BaseRollout):
             use_inference_chat_template=self.config.multi_turn.use_inference_chat_template,
             tokenization_sanity_check_mode=self.config.multi_turn.tokenization_sanity_check_mode,
             processing_class=self.processing_class,
+            enable_self_context_management=self.config.enable_self_context_management,
         )
 
         # json_request already contains sampling_params

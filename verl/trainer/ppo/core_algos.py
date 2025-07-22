@@ -28,7 +28,7 @@ import numpy as np
 import torch
 
 import verl.utils.torch_functional as verl_F
-from verl.trainer.config import AlgoConfig
+from verl.trainer.config import AlgoConfig, LengthPenaltyConfig
 
 POLICY_LOSS_REGISTRY = {}
 
@@ -240,6 +240,86 @@ def compute_gae_advantage_return(
         advantages = verl_F.masked_whiten(advantages, response_mask)
     return advantages, returns
 
+def _apply_length_based_weighting(
+    scores: torch.Tensor,
+    id2score: dict,
+    id2length: dict,
+    id2indices: dict,
+    index: torch.Tensor,
+    epsilon: float,
+    config: Optional[LengthPenaltyConfig] = None,
+) -> torch.Tensor:
+    """
+    Apply length-based weighting to scores for self-context management.
+    
+    When multiple rollouts in a group have the same maximum reward (or perfect reward),
+    prefer shorter responses by applying inverse length-based weights.
+    
+    Args:
+        scores: Current advantage scores tensor
+        id2score: Mapping from prompt index to list of scores
+        id2length: Mapping from prompt index to list of rollout lengths
+        id2indices: Mapping from prompt index to list of global indices
+        index: Tensor mapping batch positions to prompt indices
+        epsilon: Small value to prevent division by zero
+    
+    Returns:
+        Modified scores tensor with length-based weighting applied
+    """
+    for idx in id2score:
+        # skip if there are less than 2 rollouts in the group
+        if len(id2score[idx]) < 2:
+            continue
+            
+        group_scores = torch.tensor(id2score[idx], device=scores.device, dtype=scores.dtype)
+        group_lengths = torch.tensor(id2length[idx], device=scores.device)
+        group_indices = id2indices[idx]
+        
+        # Find rollouts with maximum reward or perfect reward
+        max_reward_mask = group_scores == 1.0
+        
+        # only if there are at least 2 rollouts with max reward or perfect reward
+        if torch.sum(max_reward_mask) < 2:
+            continue
+            
+        # Apply length-based weighting to max reward rollouts
+        max_reward_lengths = group_lengths[max_reward_mask]
+        max_reward_indices_local = torch.where(max_reward_mask)[0]
+        
+        length_weights = _compute_length_weights(max_reward_lengths, epsilon, config)
+        
+        # Apply weights to scores
+        for local_idx, weight in zip(max_reward_indices_local, length_weights):
+            global_idx = group_indices[local_idx]
+            scores[global_idx] = scores[global_idx] * weight
+    
+    return scores
+
+
+def _compute_length_weights(lengths: torch.Tensor, epsilon: float, config: Optional[LengthPenaltyConfig] = None) -> torch.Tensor:
+    """
+    Compute length-based weights where shorter lengths get higher weights.
+    
+    Args:
+        lengths: Tensor of rollout lengths
+        epsilon: Small value to prevent division by zero
+    
+    Returns:
+        Tensor of weights where shorter lengths have higher weights
+    """
+    min_length = torch.min(lengths).float()
+    max_length = torch.max(lengths).float()
+    
+    if max_length == min_length:
+        # All have same length, use equal weights
+        return torch.ones_like(lengths, dtype=torch.float32)
+    
+    # Linear interpolation: shortest=1.0, longest approaches 0
+    weights = 1.0 - (lengths.float() - min_length) / (max_length - min_length + epsilon)
+    if config is not None:
+        return torch.clamp(weights, min=config.min_weight_threshold, max=config.max_weight_threshold)
+    else:
+        return torch.clamp(weights, min=0.1, max=1.0)
 
 # NOTE(sgm): this implementation only consider outcome supervision, where the reward is a scalar.
 @register_adv_est(AdvantageEstimator.GRPO)  # or simply: @register_adv_est("grpo")
@@ -280,8 +360,11 @@ def compute_grpo_outcome_advantage(
             shape is (bs, response_length)
     """
     scores = token_level_rewards.sum(dim=-1)
+    rollout_lengths = response_mask.sum(dim=-1)
 
     id2score = defaultdict(list)
+    id2length = defaultdict(list)
+    id2indices = defaultdict(list)
     id2mean = {}
     id2std = {}
 
@@ -289,6 +372,8 @@ def compute_grpo_outcome_advantage(
         bsz = scores.shape[0]
         for i in range(bsz):
             id2score[index[i]].append(scores[i])
+            id2length[index[i]].append(rollout_lengths[i])
+            id2indices[index[i]].append(i)
         for idx in id2score:
             if len(id2score[idx]) == 1:
                 id2mean[idx] = torch.tensor(0.0)
@@ -303,6 +388,13 @@ def compute_grpo_outcome_advantage(
                 scores[i] = (scores[i] - id2mean[index[i]]) / (id2std[index[i]] + epsilon)
             else:
                 scores[i] = scores[i] - id2mean[index[i]]
+                
+        # Apply self-context management length-based weighting if enabled
+        if config and config.length_penalty and config.length_penalty.enable:
+            scores = _apply_length_based_weighting(
+                scores, id2score, id2length, id2indices, index, epsilon, config
+            )
+                            
         scores = scores.unsqueeze(-1) * response_mask
 
     return scores, scores

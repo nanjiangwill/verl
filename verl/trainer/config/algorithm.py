@@ -74,6 +74,15 @@ class FilterGroupsConfig(BaseConfig):
 
 
 @dataclass
+class LengthPenaltyConfig(BaseConfig):
+
+    _frozen_fields = ["enable", "min_weight_threshold", "max_weight_threshold"]
+    enable: bool = False
+    min_weight_threshold: float = 0.1
+    max_weight_threshold: float = 1.0
+
+
+@dataclass
 class AlgoConfig(BaseConfig):
     """Configuration for the algorithm.
 
@@ -100,6 +109,7 @@ class AlgoConfig(BaseConfig):
         "use_kl_in_reward",
         "kl_penalty",
         "use_pf_ppo",
+        "length_penalty",
     ]
 
     gamma: float = 1.0
@@ -112,3 +122,4 @@ class AlgoConfig(BaseConfig):
     use_pf_ppo: bool = False
     pf_ppo: Optional[PFPPOConfig] = None
     filter_groups: Optional[FilterGroupsConfig] = None
+    length_penalty: Optional[LengthPenaltyConfig] = None

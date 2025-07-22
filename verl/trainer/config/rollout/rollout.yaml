@@ -213,3 +213,5 @@ trace:
 
   # whether translate token id to text in output
   token2text: False
+
+enable_self_context_management: False

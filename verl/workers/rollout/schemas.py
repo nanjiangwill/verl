@@ -118,6 +118,12 @@ class AsyncRolloutRequest(BaseModel):
     base_conv_wo_gen_prompt_end_pos: int
     base_conv_with_gen_prompt_end_pos: int
 
+    # for self context management
+    enable_self_context_management: bool = False
+    valid_boundaries_for_input_ids: Optional[list[int]] = None
+    invalid_boundaries_for_attention_mask: Optional[list[tuple[int, int, int]]] = None
+    next_turn_input_ids: Optional[torch.Tensor] = None
+
     @model_validator(mode="before")
     @classmethod
     def initialize_request(cls, values):
@@ -213,6 +219,12 @@ class AsyncRolloutRequest(BaseModel):
             add_generation_prompt=True,
             tokenize=True,
         ).shape[-1]
+        
+        # for self context management
+        if values["enable_self_context_management"]:
+            values["valid_boundaries_for_input_ids"] = list(range(values["input_ids"].shape[-1]))
+            values["invalid_boundaries_for_attention_mask"] = []
+            values["next_turn_input_ids"] = values["input_ids"]
 
         return values
 
@@ -302,6 +314,8 @@ class AsyncRolloutRequest(BaseModel):
         """
         Update the input_ids, attention_mask, position_ids, and loss_mask of the request in additive manner.
         """
+        if self.enable_self_context_management:
+            self.valid_boundaries_for_input_ids += list(range(self.input_ids.shape[-1], self.input_ids.shape[-1] + new_input_ids.shape[-1]))
         self.input_ids = torch.cat([self.input_ids, new_input_ids], dim=-1)
         attention_mask = torch.ones_like(new_input_ids) * int(attention_mask)
         self.attention_mask = torch.cat([self.attention_mask, attention_mask], dim=-1)
@@ -353,8 +367,26 @@ class AsyncRolloutRequest(BaseModel):
             if self.input_ids[..., -self.generation_prompt_ids.shape[-1] :].eq(self.generation_prompt_ids).all()
             else self.generation_prompt_ids
         )
+
+        # self context management logic
+        if self.enable_self_context_management:
+            # Add bounds checking for valid_boundaries_for_input_ids
+            max_idx = self.input_ids.shape[-1]
+            valid_indices = [idx for idx in self.valid_boundaries_for_input_ids if 0 <= idx < max_idx]
+            self.next_turn_input_ids = self.input_ids[..., valid_indices]
+            generation_prompt_ids = (
+                None
+                if self.next_turn_input_ids[..., -self.generation_prompt_ids.shape[-1] :].eq(self.generation_prompt_ids).all()
+                else self.generation_prompt_ids
+            )
+
         if generation_prompt_ids is not None:
             self._update_input_ids(processing_class, generation_prompt_ids, attention_mask=True, loss_mask=False)
+
+        # self context management logic
+        if self.enable_self_context_management:
+            self.next_turn_input_ids = self.input_ids[..., self.valid_boundaries_for_input_ids]
+            return self.next_turn_input_ids.squeeze(0).tolist()
 
         if self.use_inference_chat_template:
             messages = [msg.model_dump() for msg in self.messages]
@@ -409,9 +441,9 @@ class AsyncRolloutRequest(BaseModel):
         self,
         processing_class: PreTrainedTokenizer | PreTrainedTokenizerFast | ProcessorMixin,
         contents: list[str | dict[str, Any]],
-    ) -> None:
+    ) -> Optional[dict[str, Any]]:
         if not contents:
-            return
+            return None
         # We also handle the case when tool returns image
         # We require the processing of the image and video to be done at tool.execute() level
         delta_multi_modal_data = {key: [] for key in self.multi_modal_keys}
@@ -481,6 +513,8 @@ class AsyncRolloutRequest(BaseModel):
             loss_mask=False,
             new_multi_modal_inputs=multi_modal_inputs,
         )
+
+        return content_info if self.enable_self_context_management else None
 
     def update_metrics(self, metrics: Any, tool_id: str) -> None:
         """
@@ -657,6 +691,22 @@ class AsyncRolloutRequest(BaseModel):
             == self.loss_mask.shape[-1]
         ), f"""Request {self.request_id} has different length of {self.input_ids.shape[-1]=}, 
             {self.attention_mask.shape[-1]=}, {self.position_ids.shape[-1]=}, {self.loss_mask.shape[-1]=}"""
+
+        # self context management logic
+        if self.enable_self_context_management:
+            self.attention_mask = torch.ones(self.input_ids.shape[-1], self.input_ids.shape[-1], dtype=torch.bool)
+            
+            for invalid_boundary in self.invalid_boundaries_for_attention_mask:
+                invalid_dim1, invalid_dim2, invalid_dim3 = invalid_boundary
+                invalid_dim1 = min(invalid_dim1, self.input_ids.shape[-1])
+                invalid_dim2 = min(invalid_dim2, self.input_ids.shape[-1])
+                invalid_dim3 = min(invalid_dim3, self.input_ids.shape[-1])
+                self.attention_mask[invalid_dim1:, invalid_dim2 : invalid_dim3] = False
+            
+            self.attention_mask = self.attention_mask.tril(diagonal=0)
+
+            self.prompt_attention_mask = self.attention_mask[:self.prompt_ids.shape[-1], :self.prompt_ids.shape[-1]]
+            self.response_attention_mask = self.attention_mask[self.prompt_ids.shape[-1]:, self.prompt_ids.shape[-1]:]
 
     def truncate_output_ids(
         self, processing_class: PreTrainedTokenizer | PreTrainedTokenizerFast | ProcessorMixin

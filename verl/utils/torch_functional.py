@@ -328,6 +328,73 @@ def pad_sequence_to_length(tensors, max_seq_len, pad_token_id, left_pad=False):
     return F.pad(tensors, pad_tuple, "constant", pad_token_id)
 
 
+def pad_2d_attention_mask_to_length(prompt_attention_mask_tensors, response_attention_mask_tensors, prompt_max_length, response_max_length, fill_value=0):
+    """
+    Pad 2D attention masks to specified lengths and combine them.
+    
+    Creates a combined attention mask with prompt and response parts properly padded.
+    The final mask has shape [batch_size, prompt_max_length + response_max_length, prompt_max_length + response_max_length].
+    
+    Args:
+        prompt_attention_mask_tensors: List of prompt attention masks (each square matrix)
+        response_attention_mask_tensors: List of response attention masks (each square matrix)  
+        prompt_max_length: Maximum prompt length for padding
+        response_max_length: Maximum response length for padding
+        fill_value: Value to use for padding (default: 0)
+        
+    Returns:
+        torch.Tensor: Batched combined attention masks
+    """
+    batch_size = len(prompt_attention_mask_tensors)
+    assert batch_size == len(response_attention_mask_tensors), \
+        "prompt_attention_mask_tensors and response_attention_mask_tensors must have the same length"
+    
+    total_length = prompt_max_length + response_max_length
+    
+    # Get device and dtype from first tensor
+    first_prompt = prompt_attention_mask_tensors[0]
+    device = first_prompt.device
+    dtype = first_prompt.dtype
+    
+    # Pre-allocate output tensor
+    padded_masks = torch.full((batch_size, total_length, total_length), fill_value, 
+                             dtype=dtype, device=device)
+    
+    # Create reusable tensors for validation
+    ones_cache = {}
+    
+    for i, (prompt_mask, response_mask) in enumerate(zip(prompt_attention_mask_tensors, response_attention_mask_tensors, strict=True)):
+        prompt_len, response_len = prompt_mask.shape[0], response_mask.shape[0]
+        
+        # Validate shapes (keeping assertions for correctness)
+        assert prompt_mask.shape[0] == prompt_mask.shape[1], "prompt_attention_mask must be square"
+        assert response_mask.shape[0] == response_mask.shape[1], "response_attention_mask must be square"
+        
+        # Optimized triangular validation with caching
+        if prompt_len not in ones_cache:
+            ones_cache[prompt_len] = torch.tril(torch.ones(prompt_len, prompt_len, device=device, dtype=dtype))
+        
+        assert torch.equal(prompt_mask, ones_cache[prompt_len]), \
+            "prompt_attention_mask must be a lower triangular matrix of 1s (causal mask)"
+        
+        # Calculate positions
+        prompt_start = prompt_max_length - prompt_len
+        response_start = prompt_max_length
+        
+        # Vectorized assignment instead of multiple operations
+        # Place prompt mask
+        padded_masks[i, prompt_start:prompt_max_length, prompt_start:prompt_max_length] = prompt_mask
+        
+        # Place response mask
+        padded_masks[i, response_start:response_start + response_len, 
+                    response_start:response_start + response_len] = response_mask
+        
+        # Response tokens attend to all prompt tokens (vectorized)
+        padded_masks[i, response_start:response_start + response_len, 
+                    prompt_start:prompt_max_length] = 1
+    
+    return padded_masks
+
 def postprocess_data(
     input_ids: torch.Tensor,
     attention_mask: torch.Tensor,
