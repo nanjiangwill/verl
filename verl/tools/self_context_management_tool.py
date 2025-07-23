@@ -149,8 +149,8 @@ class SelfContextManagementTool(BaseTool):
                             "description": "Memory index to unpin (as string)",
                         },
                         "clear_context": {
-                            "type": "string",
-                            "description": "Clear context (empty string)",
+                            "type": "boolean",
+                            "description": "Clear context",
                         },
                     },
                     "required": [],
@@ -212,7 +212,8 @@ class SelfContextManagementTool(BaseTool):
             return self.execute_unpin_memory(req, memory_idx)
             
         elif SelfMemoryManagementAction.CLEAR_CONTEXT.value in parameters:
-            return self.execute_clear_context(req)
+            if parameters.get(SelfMemoryManagementAction.CLEAR_CONTEXT.value, False):
+                return self.execute_clear_context(req)
         else:
             return f"Invalid action, supported: {self.valid_memory_management_actions}", 0.0, {}
 
