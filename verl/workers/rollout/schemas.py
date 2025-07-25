@@ -390,13 +390,15 @@ class AsyncRolloutRequest(BaseModel):
     def add_assistant_message(
         self,
         processing_class: PreTrainedTokenizer | PreTrainedTokenizerFast | ProcessorMixin,
-        content: str,
+        content: Optional[str] = None,
         content_ids: Optional[torch.Tensor] = None,
         tool_calls: Optional[list[OpenAIFunctionToolCall]] = None,
     ) -> None:
-        self.messages.append(Message(role="assistant", content=content, tool_calls=tool_calls))
+        if content is not None:
+            if content_ids is not None:
+                raise ValueError("content and content_ids cannot be provided at the same time")
+            self.messages.append(Message(role="assistant", content=content, tool_calls=tool_calls))
 
-        if content_ids is None:
             messages = [*BASE_CHAT_HISTORY, self.messages[-1]]
             tools = [tool.model_dump() for tool in self.tool_schemas] if self.tool_schemas else None
 
@@ -405,6 +407,13 @@ class AsyncRolloutRequest(BaseModel):
             content_ids = self._handle_apply_chat_template(
                 processing_class, messages, multi_modal_data={}, tools=tools, add_generation_prompt=False, tokenize=True
             )[..., self.base_conv_with_gen_prompt_end_pos :]
+
+        elif content_ids is not None:
+            if content is not None:
+                raise ValueError("content and content_ids cannot be provided at the same time")
+            assert len(content_ids) == 1, "content_ids should be with shape (1, seq_len)"
+            content = processing_class.decode(content_ids[0], skip_special_tokens=False)
+            self.messages.append(Message(role="assistant", content=content, tool_calls=tool_calls))
 
         self._update_input_ids(processing_class, content_ids, attention_mask=True, loss_mask=True)
 

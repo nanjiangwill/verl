@@ -885,7 +885,15 @@ class SGLangRollout(BaseRollout):
                     )
 
                 output = await self._handle_engine_call(_req, request_sampling_params, image_data=image_data)
-                content, content_ids = output["text"], output["output_ids"]
+                content, content_ids = None, None
+                if "text" in output:
+                    content = output["text"]
+                elif "output_ids" in output:
+                    content_ids = output["output_ids"]
+
+                if content is None and content_ids is None:
+                    raise ValueError("At least one of content or content_ids must be provided in output")
+
                 finish_reason_type = FinishReasonTypeEnum.from_str(output["meta_info"]["finish_reason"]["type"])
                 current_turns += 1
                 if finish_reason_type == FinishReasonTypeEnum.LENGTH:
