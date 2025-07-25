@@ -891,6 +891,9 @@ class SGLangRollout(BaseRollout):
                 elif "output_ids" in output:
                     content_ids = output["output_ids"]
 
+                if content is not None and content_ids is not None:
+                    raise ValueError("Only one of content or content_ids can be provided")
+
                 finish_reason_type = FinishReasonTypeEnum.from_str(output["meta_info"]["finish_reason"]["type"])
                 current_turns += 1
                 if finish_reason_type == FinishReasonTypeEnum.LENGTH:
