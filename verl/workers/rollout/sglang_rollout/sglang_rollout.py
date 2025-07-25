@@ -927,7 +927,10 @@ class SGLangRollout(BaseRollout):
                             )
                         if len(parsed_tool_calls) > 0:
                             _req.add_assistant_message(
-                                self.processing_class, content=normed_content, content_ids=content_ids, tool_calls=parsed_tool_calls
+                                self.processing_class,
+                                content=normed_content,
+                                content_ids=content_ids,
+                                tool_calls=parsed_tool_calls,
                             )
                         else:
                             _req.add_assistant_message(self.processing_class, content=content, content_ids=content_ids)
