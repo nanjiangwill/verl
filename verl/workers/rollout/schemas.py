@@ -395,8 +395,7 @@ class AsyncRolloutRequest(BaseModel):
         tool_calls: Optional[list[OpenAIFunctionToolCall]] = None,
     ) -> None:
         if content_ids is not None:
-            assert len(content_ids) == 1, "content_ids should be with shape (1, seq_len)"
-            content = processing_class.decode(content_ids[0], skip_special_tokens=False)
+            content = processing_class.decode(content_ids, skip_special_tokens=False)
 
             self.messages.append(Message(role="assistant", content=content, tool_calls=tool_calls))
 
