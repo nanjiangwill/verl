@@ -394,6 +394,9 @@ class AsyncRolloutRequest(BaseModel):
         content_ids: Optional[torch.Tensor] = None,
         tool_calls: Optional[list[OpenAIFunctionToolCall]] = None,
     ) -> None:
+        if content is not None and content_ids is not None:
+            raise ValueError("Only one of content or content_ids can be provided")
+
         if content_ids is not None:
             content = processing_class.decode(content_ids, skip_special_tokens=False)
 
