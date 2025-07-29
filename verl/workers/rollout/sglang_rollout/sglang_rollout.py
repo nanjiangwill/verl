@@ -462,8 +462,8 @@ class SGLangRollout(BaseRollout):
                 # max_running_requests=1,
                 mm_attention_backend="fa3",
                 attention_backend="fa3",
-                # we want token in token out by default
-                skip_tokenizer_init=True,
+                # In async mode, we want token in token out.
+                skip_tokenizer_init=self.config.mode == "async" or self.config.engine_kwargs.sglang.token_out,
             )
         else:
             self._engine = None
