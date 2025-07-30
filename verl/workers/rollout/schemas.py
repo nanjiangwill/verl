@@ -390,21 +390,13 @@ class AsyncRolloutRequest(BaseModel):
     def add_assistant_message(
         self,
         processing_class: PreTrainedTokenizer | PreTrainedTokenizerFast | ProcessorMixin,
-        content: Optional[str] = None,
+        content: str,
         content_ids: Optional[torch.Tensor] = None,
         tool_calls: Optional[list[OpenAIFunctionToolCall]] = None,
     ) -> None:
-        if (content is None) == (content_ids is None):
-            raise ValueError("Exactly one of content or content_ids must be provided (not both, not neither)")
+        self.messages.append(Message(role="assistant", content=content, tool_calls=tool_calls))
 
-        if content_ids is not None:
-            content = processing_class.decode(content_ids, skip_special_tokens=False)
-
-            self.messages.append(Message(role="assistant", content=content, tool_calls=tool_calls))
-
-        elif content is not None:
-            self.messages.append(Message(role="assistant", content=content, tool_calls=tool_calls))
-
+        if content_ids is None:
             messages = [*BASE_CHAT_HISTORY, self.messages[-1]]
             tools = [tool.model_dump() for tool in self.tool_schemas] if self.tool_schemas else None
 
