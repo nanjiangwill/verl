@@ -148,6 +148,7 @@ actor_rollout_ref:
     load_format: dummy_dtensor
     layered_summon: false
   hybrid_engine: true
+  nccl_timeout: 600
   model:
     path: ~/models/deepseek-llm-7b-chat
     custom_chat_template: null
@@ -189,6 +190,7 @@ trainer:
   total_epochs: 30
   total_training_steps: null
   profile_steps: null
+  profile_continuous_steps: false
   controller_nsight_options:
     trace: cuda,nvtx,cublas,ucx
     cuda-memory-usage: 'true'
