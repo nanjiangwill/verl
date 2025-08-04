@@ -174,6 +174,7 @@ def get_rollout_config(
                     "token_out": False,
                 }
             },
+            "calculate_log_probs": False,
             "max_model_len": None,
             **sampling_params,
         }
